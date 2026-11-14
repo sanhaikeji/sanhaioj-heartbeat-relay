@@ -26,7 +26,7 @@
 |---|---|---|
 | [1. 先搞清楚状况](#1-先搞清楚状况) | 背景、整体顺序、当前部署状态 | 所有人先读 |
 | [2. 第 0 步：生成一把密钥](#2-第-0-步生成一把密钥) | 一条命令生成，3 处放置位置 | 管理员 |
-| [3. 第 1 台：云中转站](#3-第-1-台云中转站) | 独立部署 / 集成到现有站点 / HTTPS 反代 | 有公网服务器的人 |
+| [3. 第 1 台：云中转站](#3-第-1-台云中转站) | 独立部署 / **挂进现有站点（默认）** / HTTPS 反代 / 上线实况 | 有公网服务器的人 |
 | [4. 第 2 台：内网 agent](#4-第-2-台内网-agent) | 学校内网常驻进程、systemd | 能碰 OJ 服务器的人 |
 | [5. 第 3 台：Hydro 插件](#5-第-3-台hydro-插件) | 安装 / 更新 / 配密钥 / 自检 | 能碰 OJ 服务器的人 |
 | [6. 学生电脑：客户端](#6-学生电脑客户端) | 环境变量、拿令牌、验证、回退 | 教练 / 学生 |
@@ -85,6 +85,7 @@ OJ 源站在学校内网。学校**不允许内网穿透**（frp / cloudflared �
 | 插件转发路由（`a5153f2` 起） | ✅ 已推送到 [sanhai-client-gateway](https://github.com/sanhaikeji/sanhai-client-gateway) |
 | 客户端 WinUI3 / Avalonia 两端接入 | ✅ 代码已改、独立编译与 e2e 通过，**尚未打包发版** |
 | 云中转站线上部署、agent 常驻、插件更新、客户端开关下发 | ⏳ **均未部署**（都是对外动作，需负责人确认） |
+| 云中转站直接挂在现有托管站点（不另起服务器） | 📖 代码已写好；**发布目录的 `server.js` 尚未合并、线上未部署**，见 [3.6](#36-现有托管站点怎么上线不用另起服务器) |
 | `1.1.0-dev.52` Linux 启动崩溃 | 🔍 根因已定位；**修复方向 A/B 待负责人拍板**，源码已恢复原状，见 [8.3](#83-110-dev52-linux-版启动崩溃) |
 
 ### 1.4 三件套 + 两个配套仓库
@@ -160,7 +161,10 @@ sudo chmod 640 /etc/sanhaioj-relay/relay-agent.key
 
 ## 3. 第 1 台：云中转站
 
-两种部署方式，**先按 A 在自己机器上跑通，再决定要不要上 B**。
+两种承载方式，**先按 3.1 的 A 在自己机器上跑通**，再按实际条件选 3.3 的 B（挂进现有站点）。
+两者跑的是**同一份 `relay.js`**，区别只在「谁提供那个公网 HTTP 端点」。
+⭐ **B 是本项目默认形态**：不需要第二台服务器，也不需要改客户端域名；
+3.6 节专门讲它在现有托管站点上的真实状态与上线步骤。
 
 ### 3.1 方式 A：独立部署（推荐，先验证）
 
@@ -285,7 +289,7 @@ curl -s https://<云域名>/relay/health
 
 ### 3.3 方式 B：集成进现有零依赖 Node 站点（**本仓库维护者的本地 site3 已有接入代码，线上尚未部署**）
 
-如果现网站点本身就是零依赖 Node，把 `relay.js` 放到 `server.js` 同目录，加三处即可：
+如果现网站点本身就是零依赖 Node，把 `relay.js` 放到 `server.js` 同目录，加文件头 1 行 + 路由 3 条即可：
 
 ```js
 const Relay = require('./relay');                                    // 文件头
@@ -296,10 +300,14 @@ if (url.pathname === '/relay/poll' && req.method === 'POST') {        // 路由�
 if (url.pathname === '/relay/agent/poll' && req.method === 'POST') {
   return readBody(req, 1024 * 1024).then((body) => Relay.handleAgentPoll(req, res, body));
 }
+if (url.pathname === '/relay/health' && req.method === 'GET') {
+  return Relay.handleHealth(res);
+}
 ```
 
 另外在站点进程环境里设 `RELAY_AGENT_KEY=<密钥>`（或同目录放 `relay-agent.key`），重启站点，
-验证 `GET /relay/health`（可以自行挂到 `Relay.handleHealth(res)`）。
+验证 `GET /relay/health`。
+⚠️ 第三条 GET 路由别漏 —— 3.6 节的体检和排障全靠它，只挂两条 POST 会 404。
 
 > `getAgentKey()` 是**调用时**读环境变量的，所以「先 require 再设 env」也生效。
 > 站点若用 `url.pathname` 解析就没问题 —— **别改回裸比较 `req.url`**，
@@ -337,6 +345,121 @@ if (url.pathname === '/relay/agent/poll' && req.method === 'POST') {
 | uid 代问超时 | 12s |
 | agent 断心跳多久算离线 | 70s |
 | C# 客户端总超时 / 单次 HTTP | 70s / 45s |
+
+### 3.6 现有托管站点怎么上线（不用另起服务器）
+
+**这是本方案默认、也是最省事的形态：云中转站不是一台独立服务器，
+而是现有站点 `server.js` 进程里的 3 条路由 + 同目录一个 `relay.js`。**
+
+客户端默认根就是站点自己的域名，所以**不用买机器、不用改 DNS、不用换证书、
+不用改 `DefaultRoot`、不用设 `OJ_RELAY_URL`**。
+「云中转站」里的那个「站」，指的就是同一个站，不是第二台。
+
+| 项 | 说明 |
+|---|---|
+| 专用「中转服务器」 | ✅ 完全不需要 |
+| 公网 HTTP 端点 | 由现有站点域名直接提供（`/relay/*`） |
+| 内网 agent（第 4 章） | ❌ 仍不能省 —— 学校禁的是入站，不是某个云厂商 |
+| 插件转发路由（第 5 章） | ❌ 仍不能省 |
+| 学生先在校园网拿令牌（6.1） | ❌ 仍不能省 |
+
+三段链路全靠**出向**长轮询在站点这个「两边都能连到」的公网端点汇合；
+换个承载位置不会让内网 agent 和插件转发路由消失。
+
+**① 当前真实状态（2026-11-14 逐文件取证）**
+
+| | 工程目录的 `site3/` | 发布目录的 `site3/` |
+|---|---|---|
+| `server.js` 里 `require('./relay')` | ✅ 有 | ❌ 没有 |
+| `POST /relay/poll`、`POST /relay/agent/poll` | ✅ 有 | ❌ 没有 |
+| `GET /relay/health` | ✅ 有（`service: "sanhaioj-relay-heartbeat"`） | ❌ 没有 |
+| `relay.js` | ✅ 有 | ❌ 没有 |
+
+→ **代码早就写好了，差的只是「让线上那份 `server.js` 也带上这几行」**，也就是上线动作。
+
+> ⚠️ 别拿 `GET /health` 判断中转在不在线：发布目录里 `service: "sanhaioj-relay"`
+> 是**老站点自己的健康检查**（返回上传数、白名单、积分等），跟心跳中转无关。
+> 要打 **`GET /relay/health`**，看 `agentKeyConfigured` 与 `agentOnline`。
+
+**② 为什么常规发版带不上它（最容易卡住的一步）**
+
+第 9 章规定同步**只覆盖 4 项**：`index.html`、`version.json`、`download/`、`shots/`，
+并明确**不能覆盖发布目录的 `server.js` 和 `particles3d.js`** ——
+发布目录那份 `server.js` 是线上在跑的版本，整目录覆盖会毁掉站点。
+所以心跳中转**不能靠 `release.py` 自动带上线**，必须单独做一次「补文件 + 合并路由」：
+
+```bash
+# 在 <发布目录>\site3 下操作（不是工程目录！appId 是按发布目录认的）
+cd "<发布目录>\site3"
+
+# ① 先备份线上在跑的 server.js
+cp server.js server.js.bak-$(date +%Y%m%d-%H%M%S)
+
+# ② 补云侧核心（零依赖，只用 Node 内置模块）
+cp "<工程目录>\site3\relay.js" ./relay.js
+
+# ③ 放密钥：托管站点通常不能设环境变量，用同目录 key 文件
+#    getAgentKey() 是「环境变量 RELAY_AGENT_KEY 优先，其次同目录 relay-agent.key」
+printf %s '<密钥>' > relay-agent.key
+chmod 600 relay-agent.key
+```
+
+然后在发布目录的 `server.js` 里加 **文件头 1 行 + 路由 3 条**。
+站点版用的是自己的 `sendJson(res, 200, {...})`，直接照抄工程目录那四段：
+
+```js
+const Relay = require('./relay');                                  // 文件头，与其它 require 放一起
+
+// 路由区：插在原有 /health 之前，别动 /health 本身
+if (url.pathname === '/relay/health' && req.method === 'GET') {
+  return sendJson(res, 200, {
+    ok: true, service: 'sanhaioj-relay-heartbeat',
+    agentOnline: Relay.agentOnline(),
+    agentKeyConfigured: !!Relay.getAgentKey(),
+    queue: Relay.queueStats(),
+    note: '隧道 1033 时云直连不到 OJ，uid 映射靠 agent 代问',
+  });
+}
+if (url.pathname === '/relay/poll' && req.method === 'POST') {
+  return readBody(req, 1024 * 1024).then((body) => Relay.handleClientPoll(req, res, body));
+}
+if (url.pathname === '/relay/agent/poll' && req.method === 'POST') {
+  return readBody(req, 1024 * 1024).then((body) => Relay.handleAgentPoll(req, res, body));
+}
+```
+
+> ⚠️ **绝不整文件覆盖** `server.js`：发布目录那份含线上专属改动
+> （`particles3d.js`、`uploads/`、`.wbapp_<appId>.genie` 同理，都别碰）。
+> 用 `url.pathname`，**别改回裸比较 `req.url`** —— 走系统代理的 .NET 客户端
+> 请求行是绝对 URI，裸比较会全部 404。
+> 独立 `server.js` 里那条 `/relay/health` 用的是 `Relay.handleHealth(res)`（字段更全），
+> 站点版用 `sendJson` 是等价的简化写法，二选一即可。
+
+**③ 托管站点上真正的两个约束**
+
+- **必须单进程单实例**：`queues` / `pending` / `results` / `uidMap` 全在进程内存里。
+  托管平台若自动多实例 / 冷启动多副本，客户端提交的请求和 agent 领走的任务会落到不同实例，
+  表现为「请求发出去永远没结果」。常驻 Node 进程正好合适；
+  **别用云函数 / Serverless / 自动扩缩容**跑（25 秒长轮询按秒计费 + 内存态不共享）。
+- **uid 映射会落盘**：`relay.js` 同目录 `relay-state/uid-map.json`（`saveStateSoon()`，2 秒防抖）。
+  写盘失败**只打日志、不会崩**（有 `try/catch`），但重启后映射丢失 →
+  每个令牌重新走一次 agent 代问（客户端自动重试 503），不是致命，只是首次变慢。
+  要稳定就让该目录可写且持久化。
+
+**④ 验证**
+
+```bash
+curl -s https://<云域名>/relay/health
+# agentKeyConfigured 必须 true；agentOnline 在第 4 章装完 agent 后才会变 true
+```
+
+然后按第 7 章端到端清单逐条打勾。
+
+**⑤ 上线是对外动作**
+
+必须从 `<发布目录>` 重新发布（appId 按目录认，从工程目录发布会另建应用），
+按第 9 章**先经负责人确认**。截至 2026-11-14，线上云中转站、内网 agent、
+插件更新、客户端开关**都还没部署**，见 1.3 节。
 
 ---
 
@@ -1031,6 +1154,16 @@ POST /relay/poll
 ---
 
 ## 12. FAQ / 名词表
+
+**Q：能不能不要单独一台「中转服务器」，把中继直接做在现有托管站点里？**
+**能，而且这就是当前设计**（见 [3.6](#36-现有托管站点怎么上线不用另起服务器)）。
+云中转站不是一台机器，只是现有 `server.js` 里的 3 条路由 + 同目录 `relay.js`：
+不用买机器、不用改 DNS / 证书 / 客户端默认根。
+代码在工程目录里**已经写好**，差的是发布目录那份 `server.js` 没合并这几行、还没上线。
+但**公网汇合端点、内网 agent、插件转发路由一个都省不掉** —— 学校禁的是「入站」，
+不是「某个云厂商」；只有两端都能主动外连到同一个公网端点，三段链路才成立。
+另外云函数 / Serverless 不适合 25 秒长轮询，见 3.6 节 ③。
+⚠️ 若哪天 OJ 站点本身就公网可达，那整套中转都不需要，客户端直连即可。
 
 **Q：能不能不装 agent，让云直接连 OJ？**
 不能。云在公网，要够到内网 OJ 就得「暴露端口 / 开隧道」，正是学校禁的。agent 的价值就是把出向能力放在内网。

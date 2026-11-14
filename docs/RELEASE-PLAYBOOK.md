@@ -200,6 +200,8 @@ robocopy "<工程目录>\site3\shots" "<发布目录>\site3\shots" /MIR
 > （全量路由里 `grep "/relay/"` 0 命中；文件里的 "relay" 全是历史命名：
 > `RELAY_PUBLIC_BASE` 拼上传直链、`relay-auth.js` 旧签名、`service:'sanhaioj-relay'` 文字）。
 > 工程目录的 `site3` 里已经有接入代码，但**还没同步/发布过**。
+> 「补 `relay.js` + 合并 3 条路由 + 放密钥文件」的照抄命令见主 [README 第 3.6 节](../README.md#36-现有托管站点怎么上线不用另起服务器)；
+> ⚠️ 这一步**不能靠下面第 4 步的 4 项同步完成** —— `server.js` 不在同步清单里，必须单独合并，且绝不整文件覆盖。
 > 要让线上支持中转，必须另外做一次服务端代码同步 + 配 `RELAY_AGENT_KEY` + 重启站点，
 > 这属于对外动作，见 [HEARTBEAT-RELAY-DESIGN.md](HEARTBEAT-RELAY-DESIGN.md) 的「未完成事项」。
 > 两份 `relay.js` / `relay-agent/agent.js` 与独立开源仓库逐字节相同；
