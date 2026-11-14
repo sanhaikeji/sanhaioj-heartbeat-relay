@@ -109,10 +109,15 @@ python release.py 1.1.0-dev.53
    $d.targets['.NETCoreApp,Version=v8.0/linux-x64']['Avalonia.Skia/11.3.22'].dependencies
    ```
    **判据是「`SkiaSharp` 主包版本 == `SkiaSharp.NativeAssets.Linux` 版本」，不是「必须全是
-   2.88.9」** —— 两个方向都对：
-   - 退回路线（已采用）：主包 `2.88.9` + Linux 原生 `2.88.9`；
-   - 升级路线：主包与 Linux 原生都 `4.154.0`（前提是该版本确实提供 Linux 原生资产包）。
-   本项目修复后 `project.assets.json` 实测：
+   2.88.9」** —— 两条**候选路线**（2026-11-08 尚未定案，源码已恢复原状）：
+   - 退回路线：主包 `2.88.9` + Linux 原生 `2.88.9`，但**必须同时改
+     `Controls/LiquidGlassPanel.cs`**（它用了 SkiaSharp 4.x 才有的 `SKRuntimeEffect` API），
+     否则编译直接失败；
+   - 升级路线：主包与 Linux 原生都 `4.154.0`（NuGet 官方确有
+     `SkiaSharp.NativeAssets.Linux/4.154.0`），但 Avalonia.Skia/11.3.22 是针对 2.88.9
+     编译的二进制，运行时兼容需 Linux 真机验证。
+   详见 [TROUBLESHOOTING-Linux52.md](TROUBLESHOOTING-LINUX52.md) 第 6.2 节。
+   **下面这组版本号只是「退回路线隔离实验」的实测值，不是当前工程状态**：
    `SkiaSharp/2.88.9`、`SkiaSharp.NativeAssets.Linux/2.88.9`、
    `SkiaSharp.NativeAssets.Win32/2.88.6`、`SkiaSharp.NativeAssets.macOS/2.88.6`、
    `SkiaSharp.NativeAssets.Linux.NoDependencies/2.88.9`（Win32/macOS 的 2.88.6 是

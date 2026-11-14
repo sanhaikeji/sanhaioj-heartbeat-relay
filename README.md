@@ -85,7 +85,7 @@ OJ 源站在学校内网。学校**不允许内网穿透**（frp / cloudflared �
 | 插件转发路由（`a5153f2` 起） | ✅ 已推送到 [sanhai-client-gateway](https://github.com/sanhaikeji/sanhai-client-gateway) |
 | 客户端 WinUI3 / Avalonia 两端接入 | ✅ 代码已改、独立编译与 e2e 通过，**尚未打包发版** |
 | 云中转站线上部署、agent 常驻、插件更新、客户端开关下发 | ⏳ **均未部署**（都是对外动作，需负责人确认） |
-| `1.1.0-dev.52` Linux 启动崩溃 | 🔍 根因已定位，见 [8.3](#83-110-dev52-linux-版启动崩溃) |
+| `1.1.0-dev.52` Linux 启动崩溃 | 🔍 根因已定位；**修复方向 A/B 待负责人拍板**，源码已恢复原状，见 [8.3](#83-110-dev52-linux-版启动崩溃) |
 
 ### 1.4 三件套 + 两个配套仓库
 
@@ -712,6 +712,13 @@ sudo journalctl -u oj-relay     -f --no-pager &
 与 beta.51 逐项比对，这是 52 **唯一的依赖变更**；托管/原生版本错配导致缺导出符号，
 Avalonia 启动第一阶段建 Skia 渲染面时崩溃 → 「运行即崩、无窗口」。
 次要问题是 `.deb` 的 `Depends` 没声明 ICU / OpenSSL / Xfixes / GL。
+
+> ⚠️ **修复方向尚未定案，源码已恢复原状**：退回 `2.88.9` 会撞上
+> `Controls/LiquidGlassPanel.cs` 里的 SkiaSharp 4.x-only API（`SKRuntimeEffect`）导致编译失败，
+> 需同时改功能代码；保持 `4.154.0` 则要显式补齐 `SkiaSharp.NativeAssets.Linux/4.154.0`
+> 并做 Linux 真机兼容验证。两条路线的取舍见
+> [docs/TROUBLESHOOTING-LINUX52.md 第 6.2 节](docs/TROUBLESHOOTING-LINUX52.md)。
+> **在修复版发出之前，不要让用户升级到 52 Linux 版**，用下面的回退。
 
 **能立刻做的三件事：**
 

@@ -113,8 +113,19 @@ sudo apt install -f
 
 ```bash
 sudo apt install -y libicu70 libssl3 libx11-6 libxfixes3 libgl1 \
-                    libfontconfig1 libfreetype6 libgtk-3-0 libwebkit2gtk-4.1-0
+                    libfontconfig1 libfreetype6
 ```
+
+> ⚠️ **不要**照抄带 `libgtk-3-0` / `libwebkit2gtk-4.1-0` / `libwpe` 的「全家桶」补装命令：
+> 客户端 Linux 端 WebView 是**恒禁用**的，这些库不参与启动。把它们当成必需依赖，
+> 反而会在 GNOME / KDE 已装 GTK4 的桌面、WSL、容器上引入额外冲突与下载量。
+> `.deb` 的依赖声明也要**分层**：最小修复只补
+> `libicu*`（alternatives 写法）/ `libssl3` / `libxfixes3` / `libgl1` 等硬依赖；
+> WebView 相关只放 `Recommends`（可选），**绝不能**当硬 `Depends`。
+>
+> 打包侧同理：**不要**把 `SkiaSharp.NativeAssets.Win32` / `macOS` / `Linux.NoDependencies`
+> 这些包塞进 `.deb` 的 `Depends` —— 它们是 NuGet 托管包，不是系统库，
+> 且单文件发布时已内嵌，写进 deb 依赖只会让 `apt` 找不到包而装不上。
 
 只想快速验证是不是 ICU：
 
@@ -247,35 +258,70 @@ SkiaSharp.NativeAssets.macOS/4.154.0       ← 匹配
 另外 `SkiaSharp.NativeAssets.Linux/2.88.9` 自身还声明依赖 `SkiaSharp 2.88.9`，
 与主包冲突；NuGet 因 `>=` 语义**不报错**，但运行时必炸（所以编译期完全看不出来）。
 
-> 修复方案的含义：本机 NuGet 缓存里 `skiasharp.nativeassets.linux` **只有 2.88.9**。
-> 最稳是把主包退回 `2.88.9`（beta.51 已验证、无需联网、改一行）。
-> 若坚持 `4.154.0`，需显式引用匹配的 Linux 原生资产包并联网还原，
-> 且要先确认 4.x 的确切包名（`SkiaSharp/4.154.0` 的 nuspec 里没列 Linux 资产包），别盲改版本号。
+> 修复含义：本机 NuGet 缓存里 `skiasharp.nativeassets.linux` 只有 2.88.9，
+> 但 **NuGet 官方确实发布 `SkiaSharp.NativeAssets.Linux/4.154.0`**
+> （主包 nuspec 没自动拉它，正是错配根因）。所以两条路线都有实物可依，
+> 区别只在「改功能代码」还是「改依赖 + 冒运行时兼容风险」，见 6.2。
 
 后果：4.154.0 的托管封装 `DllImport("libSkiaSharp")` 加载 88.1.0 的旧原生库，
 缺新增导出符号 → `EntryPointNotFoundException` / 原生层崩溃。
 Avalonia 启动就建 Skia 渲染面，所以「运行即崩、无窗口」。
 
-### 6.2 修复方向
+### 6.2 修复方向（**方向未定，需负责人拍板**）
 
-1. **把 `SkiaSharp` 退回 `2.88.9`**（与 `Avalonia.Skia/11.3.22`、
-   `CSharpMath.SkiaSharp/0.5.1`、`SkiaSharp.NativeAssets.Linux/2.88.9` 对齐），
-   这是 beta.51 已验证可用的组合。**不要**只升托管不升原生。
-   若确实需要 4.x，必须同时显式引用匹配版本的原生 assets，并确认 Avalonia 11.3.22 的 API 兼容。
-2. `OJSetup/release.py:112-119`：Avalonia 的 publish **建议补**
+> ⚠️ 2026-11-08 更新：**这里列的是两条候选路线，不是「已经这么改了」。**
+> 曾按路线 A 试改过，`dotnet build` 直接编译失败（见下方 6.2.1），
+> 已把三处源码**恢复原状**、改动整理成待用补丁，等选择后再应用。
+> 在此之前，线上用户仍走第 5 节的「回退 beta.51」。
+
+**共同前提：`SkiaSharp` 主包版本必须与 `SkiaSharp.NativeAssets.Linux` 版本一致。**
+
+| | 路线 A：退回 2.88.9 | 路线 B：保持 4.154.0、补齐 Linux 原生 |
+|---|---|---|
+| 做法 | 主包退回 `2.88.9`（与 `Avalonia.Skia/11.3.22`、`CSharpMath.SkiaSharp/0.5.1` 对齐） | 显式引用 `SkiaSharp.NativeAssets.Linux/4.154.0`，让 native 从 2.88.9 升到 4.154.0 |
+| 包是否存在 | 本机缓存就有，无需联网 | ✅ NuGet 官方有 `4.154.0`（主包 nuspec 没自动拉它，需显式引用），但要联网还原 |
+| 代价 | **必须同时改 `Controls/LiquidGlassPanel.cs`**（见 6.2.1） | 无需动功能代码，但 Avalonia.Skia/11.3.22 是针对 2.88.9 编译的二进制，4.x 是否运行时兼容**未知，需 Linux 真机验证** |
+| 风险 | 牺牲 / 降级液态玻璃真实折射（改用 CPU 兜底） | 可能出现 `MissingMethodException` 之类运行时错误，编译期看不出来 |
+
+#### 6.2.1 路线 A 为什么不是「改一行」
+
+`OjClientLinux/Controls/LiquidGlassPanel.cs` 用的是 **SkiaSharp 4.x 才有**的 API：
+
+```csharp
+SKRuntimeEffect.CreateShader(...)
+SKRuntimeEffectUniforms / SKRuntimeEffectChildren / SKRuntimeEffect.Uniforms
+SKShader.CreateRuntimeShader(effect, uniforms, children, ...)
+```
+
+该文件的注释明说：当初正是为了绕开 **2.88.9 原生层** 的
+`SEHException` / `AccessViolationException`（`SKRuntimeEffect` 构造函数直接抛），
+才把主包升到 4.x 改用 3 参数重载。`SKRuntimeEffect.Build(String)` 在 2.88.9 里返回 `void`。
+另外 `Controls/Liquid/GlassCore.LensCpu` 还有自己的 `SKRuntimeEffect` 用法。
+
+所以路线 A 需要**第四处改动**：把 SkSL / `SKRuntimeEffect` 路径用编译期开关隔离
+（当前只有 `OJ_GLASS_SKSL=0` 的**运行时**开关，没有编译期隔离），
+退回 2.88.9 时让液态玻璃走 CPU 逐像素兜底。这属于**产品取舍**（要不要保留真实折射），
+不能由工具擅自决定，故暂停等确认。
+
+#### 6.2.2 其余修复项（两条路线都适用）
+
+1. `OJSetup/release.py:112-119`：Avalonia 的 publish **建议补**
    `-p:InformationalVersion=<版本>`（WinUI 那条 `build-dist.py:124-148` 已经做了），
    作为结构性保险。
    ⚠️ **这不是 52 的既成故障**：实测 `release.py` 的 `-p:Version=` 覆盖**完全生效**，
    `OjClientLinux.dll` 与 93MB 单文件里 `beta.34` 出现 **0 次**，只有 `1.1.0-dev.52`
    与 `1.1.0.0`；`csproj:20` 的 `1.1.0-beta.34` 只是本地 build 默认值，发版时被覆盖。
    该项**只影响「检查更新」，不影响启动**，别写成「当前 DLL 自报旧版本号」。
-3. `OJSetup/make-deb.py:49-51` 的 `DEPENDS` 补齐 `libicu*`、`libssl3`、`libxfixes3`、`libgl1`；
-   WebView 相关（GTK/WPE）建议放 `Recommends` 而不是硬 `Depends`，避免在精简系统上装不上。
-4. `.desktop`（`make-deb.py:108-122`）无 `Env=`、无 wrapper →
+2. `OJSetup/make-deb.py:49-51` 的 `DEPENDS` **分层补齐**：硬依赖只加
+   `libicu*`（用 alternatives 写法，别写死单一版本）、`libssl3`、`libxfixes3`、`libgl1`；
+   WebView 相关（GTK/WPE）**只放 `Recommends`**，不能当硬 `Depends` ——
+   Linux 端 WebView 恒禁用，加硬依赖会在精简系统 / GTK4 桌面上装不上。
+   ⚠️ 更不要把 `SkiaSharp.NativeAssets.*` 这些 NuGet 托管包写进 `Depends`（它们不是系统库）。
+3. `.desktop`（`make-deb.py:108-122`）无 `Env=`、无 wrapper →
    建议加一个启动脚本兜底 `DISPLAY` / `XDG_SESSION_TYPE`，并在启动前做一次依赖自检。
-5. `site3/download/SanhaiOJ-linux-x64` 权限是 `0644`（没可执行位），
+4. `site3/download/SanhaiOJ-linux-x64` 权限是 `0644`（没可执行位），
    `.deb` 内是 `0755`。发布时给免安装单文件加可执行位，或在下载页写明要 `chmod +x`。
-6. 加一个启动前的 stderr 捕获（在 `UnhandledException` 钩子注册之前也能写日志），
+5. 加一个启动前的 stderr 捕获（在 `UnhandledException` 钩子注册之前也能写日志），
    否则运行时 / 平台层崩溃永远是「日志空白」。
 
 ### 6.3 相关文件索引
