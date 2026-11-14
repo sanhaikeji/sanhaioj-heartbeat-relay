@@ -109,7 +109,7 @@ python release.py 1.1.0-dev.53
    $d.targets['.NETCoreApp,Version=v8.0/linux-x64']['Avalonia.Skia/11.3.22'].dependencies
    ```
    **判据是「`SkiaSharp` 主包版本 == `SkiaSharp.NativeAssets.Linux` 版本」，不是「必须全是
-   2.88.9」** —— 两条**候选路线**（2026-11-08 尚未定案，源码已恢复原状）：
+   2.88.9」** —— 两条**候选路线**（截至 2026-11-14 尚未定案，源码已恢复原状）：
    - 退回路线：主包 `2.88.9` + Linux 原生 `2.88.9`，但**必须同时改
      `Controls/LiquidGlassPanel.cs`**（它用了 SkiaSharp 4.x 才有的 `SKRuntimeEffect` API），
      否则编译直接失败；
