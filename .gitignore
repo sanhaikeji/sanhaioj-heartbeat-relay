@@ -1,0 +1,5 @@
+relay-state/
+*.key
+node_modules/
+# 本机专用常量（真实绝对路径 / appId / 凭据细节），不上传公开仓库
+LOCAL.md
