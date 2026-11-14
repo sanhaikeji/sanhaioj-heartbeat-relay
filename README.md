@@ -84,8 +84,9 @@ OJ 源站在学校内网。学校**不允许内网穿透**（frp / cloudflared �
 | 三段链路代码 + 单元/端到端测试 | ✅ 已完成，测试全绿 |
 | 插件转发路由（`a5153f2` 起） | ✅ 已推送到 [sanhai-client-gateway](https://github.com/sanhaikeji/sanhai-client-gateway) |
 | 客户端 WinUI3 / Avalonia 两端接入 | ✅ 代码已改、独立编译与 e2e 通过，**尚未打包发版** |
-| 云中转站线上部署、agent 常驻、插件更新、客户端开关下发 | ⏳ **均未部署**（都是对外动作，需负责人确认） |
-| 云中转站直接挂在现有托管站点（不另起服务器） | 📖 代码已写好；**发布目录的 `server.js` 尚未合并、线上未部署**，见 [3.6](#36-现有托管站点怎么上线不用另起服务器) |
+| 云中转站（直接挂在现有托管站点，不另起服务器） | ✅ **2026-11-14 已合并并从旧发布目录发布**：带分享码时 `/relay/health` 200 且 `agentKeyConfigured:true`、老 `/health` 与 `/version.json` 数据未丢；见 [3.6](#36-现有托管站点怎么上线不用另起服务器) |
+| ⚠️ 托管平台分享码 403 | 🔍 裸域名（不带 `?sharecode=`）一律返回 HTML「链接不完整」；带分享码或先取 `__wb_rsc` cookie 才放行。**客户端默认根不带分享码 → 中转 / 自动更新目前仍连不上**，见 3.6 节 ④ |
+| 内网 agent 常驻、插件更新、客户端开关下发 | ⏳ **均未部署**（对外动作，需负责人确认） |
 | `1.1.0-dev.52` Linux 启动崩溃 | 🔍 根因已定位；**修复方向 A/B 待负责人拍板**，源码已恢复原状，见 [8.3](#83-110-dev52-linux-版启动崩溃) |
 
 ### 1.4 三件套 + 两个配套仓库
@@ -295,10 +296,18 @@ curl -s https://<云域名>/relay/health
 const Relay = require('./relay');                                    // 文件头
 
 if (url.pathname === '/relay/poll' && req.method === 'POST') {        // 路由区
-  return readBody(req, 1024 * 1024).then((body) => Relay.handleClientPoll(req, res, body));
+  return readBody(req, 1024 * 1024).then((buf) => {
+    let parsed = {};
+    try { parsed = JSON.parse(buf.toString('utf8') || '{}'); } catch { parsed = {}; }
+    return Relay.handleClientPoll(req, res, parsed);
+  });
 }
 if (url.pathname === '/relay/agent/poll' && req.method === 'POST') {
-  return readBody(req, 1024 * 1024).then((body) => Relay.handleAgentPoll(req, res, body));
+  return readBody(req, 1024 * 1024).then((buf) => {
+    let parsed = {};
+    try { parsed = JSON.parse(buf.toString('utf8') || '{}'); } catch { parsed = {}; }
+    return Relay.handleAgentPoll(req, res, parsed);
+  });
 }
 if (url.pathname === '/relay/health' && req.method === 'GET') {
   return Relay.handleHealth(res);
@@ -308,6 +317,11 @@ if (url.pathname === '/relay/health' && req.method === 'GET') {
 另外在站点进程环境里设 `RELAY_AGENT_KEY=<密钥>`（或同目录放 `relay-agent.key`），重启站点，
 验证 `GET /relay/health`。
 ⚠️ 第三条 GET 路由别漏 —— 3.6 节的体检和排障全靠它，只挂两条 POST 会 404。
+
+⚠️ **站点版 `readBody(req, limit)` 返回 Buffer**：必须先
+`JSON.parse(buf.toString('utf8'))` 再交给 `Relay.handle*Poll`。
+独立 `server.js` 里那个 `readBody` 返回的是字符串，**不能直接照抄它的
+`.then((body) => ...)` 写法**，否则客户端请求一律 401。
 
 > `getAgentKey()` 是**调用时**读环境变量的，所以「先 require 再设 env」也生效。
 > 站点若用 `url.pathname` 解析就没问题 —— **别改回裸比较 `req.url`**，
@@ -421,10 +435,18 @@ if (url.pathname === '/relay/health' && req.method === 'GET') {
   });
 }
 if (url.pathname === '/relay/poll' && req.method === 'POST') {
-  return readBody(req, 1024 * 1024).then((body) => Relay.handleClientPoll(req, res, body));
+  return readBody(req, 1024 * 1024).then((buf) => {
+    let parsed = {};
+    try { parsed = JSON.parse(buf.toString('utf8') || '{}'); } catch { parsed = {}; }
+    return Relay.handleClientPoll(req, res, parsed);
+  });
 }
 if (url.pathname === '/relay/agent/poll' && req.method === 'POST') {
-  return readBody(req, 1024 * 1024).then((body) => Relay.handleAgentPoll(req, res, body));
+  return readBody(req, 1024 * 1024).then((buf) => {
+    let parsed = {};
+    try { parsed = JSON.parse(buf.toString('utf8') || '{}'); } catch { parsed = {}; }
+    return Relay.handleAgentPoll(req, res, parsed);
+  });
 }
 ```
 
@@ -446,20 +468,48 @@ if (url.pathname === '/relay/agent/poll' && req.method === 'POST') {
   每个令牌重新走一次 agent 代问（客户端自动重试 503），不是致命，只是首次变慢。
   要稳定就让该目录可写且持久化。
 
-**④ 验证**
+**④ 验证（含托管平台分享码这一层）**
 
 ```bash
-curl -s https://<云域名>/relay/health
-# agentKeyConfigured 必须 true；agentOnline 在第 4 章装完 agent 后才会变 true
+# ① 裸域名：平台层会拦，跟站点代码无关
+curl -s -o /dev/null -w "%{http_code}\n" https://<云域名>/relay/health     # 403 + HTML「链接不完整」
+
+# ② 带分享码（发布工具返回的完整链接里 ?sharecode= 那串）
+curl -s "https://<云域名>/relay/health?sharecode=<分享码>"                 # 200 JSON
+curl -s "https://<云域名>/health?sharecode=<分享码>"                        # 老健康检查仍 200
+curl -s -X POST "https://<云域名>/relay/poll?sharecode=<分享码>" \
+  -H 'Content-Type: application/json' -d '{"token":"invalid","requests":[]}'
+# → 503「中转正在确认你的身份」= 路由通了、agent 还没装的正常态
+
+# ③ 或先取一次 cookie，之后裸域名全部放行
+curl -s -c /tmp/oj.jar "https://<云域名>/?sharecode=<分享码>" -o /dev/null
+curl -s -b /tmp/oj.jar https://<云域名>/relay/health                       # 200
 ```
+
+> ⚠️ **2026-11-14 实测的坑**：托管平台对**不带分享码**的请求一律 403 返回
+> 「链接不完整」HTML，连 `/health`、`/version.json` 也一样。
+> 访问一次带 `?sharecode=` 的完整链接会下发 `__wb_rsc` cookie
+> （30 天、HttpOnly、Secure、SameSite=None），之后带该 cookie 的裸域名请求全部放行。
+> 这与站点代码、发布目录、`server.js` 路由都**无关**，是平台层访问控制；
+> 同一个根因也解释了「线上 `version.json` 返回 HTML、自动更新链路失效」。
+>
+> **对客户端的影响（重要）**：两端 `HeartbeatRelay.cs` 是 `Root + "/relay/poll"` 直接拼路径，
+> `Root` 不能带 query（会拼成 `.../?sharecode=xxx/relay/poll`）。要让客户端真正走中转，
+> 需二选一（**都要改客户端并发版，属对外动作**）：
+> ① 启动时先用同一个 `HttpClient` GET 一次完整分享链接拿 cookie；
+> ② 把分享码作为 query 参数附在每条 `/relay/*` 请求后面。
+> 未做之前，即便 `agentOnline` 变成 `true`，学生端也连不上云。
 
 然后按第 7 章端到端清单逐条打勾。
 
 **⑤ 上线是对外动作**
 
 必须从 `<发布目录>` 重新发布（appId 按目录认，从工程目录发布会另建应用），
-按第 9 章**先经负责人确认**。截至 2026-11-14，线上云中转站、内网 agent、
-插件更新、客户端开关**都还没部署**，见 1.3 节。
+按第 9 章**先经负责人确认**。2026-11-14 已在确认后完成一次发布，顺序是：
+备份 → 补 `relay.js` 与 `relay-agent.key` → 文件头加 `require` + `/health` 前插 3 条路由
+→ 本地起服务 6/6 验证 → 发布。线上老 `/health` 的 uploads / feedback / points 数据保持不变，
+说明复用了原 appId、**没有另建应用**。
+内网 agent 常驻、插件更新、客户端开关下发**仍全部未做**，见 1.3 节。
 
 ---
 
@@ -1164,6 +1214,11 @@ POST /relay/poll
 不是「某个云厂商」；只有两端都能主动外连到同一个公网端点，三段链路才成立。
 另外云函数 / Serverless 不适合 25 秒长轮询，见 3.6 节 ③。
 ⚠️ 若哪天 OJ 站点本身就公网可达，那整套中转都不需要，客户端直连即可。
+
+**Q：线上 `/version.json`、`/relay/health` 返回 HTML「链接不完整」，是不是发布坏了？**
+不是。托管平台对不带 `?sharecode=` 的请求一律 403，见 3.6 节 ④。
+带分享码访问一次会拿到 `__wb_rsc` cookie，之后裸域名就通。
+这跟「漏同步文件」「发成静态站点」「发成新应用」是**不同原因**，别按那几种去查。
 
 **Q：能不能不装 agent，让云直接连 OJ？**
 不能。云在公网，要够到内网 OJ 就得「暴露端口 / 开隧道」，正是学校禁的。agent 的价值就是把出向能力放在内网。
