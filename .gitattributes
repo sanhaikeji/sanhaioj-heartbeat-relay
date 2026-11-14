@@ -1,0 +1,5 @@
+# 补丁/差异文件必须保持 LF 行尾。
+# Windows 上 core.autocrlf=true 会把检出文件转成 CRLF，
+# 导致 `git apply` 解析 hunk 行数与上下文失败（"corrupt patch"）。
+*.patch text eol=lf
+*.diff  text eol=lf

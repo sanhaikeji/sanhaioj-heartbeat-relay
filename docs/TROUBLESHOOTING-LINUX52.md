@@ -271,7 +271,9 @@ Avalonia 启动就建 Skia 渲染面，所以「运行即崩、无窗口」。
 
 > ⚠️ 2026-11-14 勘误：**这里列的是两条候选路线，不是「已经这么改了」。**
 > 曾按路线 A 试改过，`dotnet build` 直接编译失败（见下方 6.2.1），
-> 已把三处源码**恢复原状**、改动整理成待用补丁，等选择后再应用。
+> 已把三处源码**恢复原状**；只有路线 B 的改动整理成了待命补丁
+> [`docs/linux52-routeB.patch`](linux52-routeB.patch)，**尚未应用**，等负责人拍板后再决定。
+> 路线 A 还要额外改 `Controls/LiquidGlassPanel.cs`，**没有**现成补丁。
 > 在此之前，线上用户仍走第 5 节的「回退 beta.51」。
 
 **共同前提：`SkiaSharp` 主包版本必须与 `SkiaSharp.NativeAssets.Linux` 版本一致。**
@@ -282,6 +284,26 @@ Avalonia 启动就建 Skia 渲染面，所以「运行即崩、无窗口」。
 | 包是否存在 | 本机缓存就有，无需联网 | ✅ NuGet 官方有 `4.154.0`（主包 nuspec 没自动拉它，需显式引用），但要联网还原 |
 | 代价 | **必须同时改 `Controls/LiquidGlassPanel.cs`**（见 6.2.1） | 无需动功能代码，但 Avalonia.Skia/11.3.22 是针对 2.88.9 编译的二进制，4.x 是否运行时兼容**未知，需 Linux 真机验证** |
 | 风险 | 牺牲 / 降级液态玻璃真实折射（改用 CPU 兜底） | 可能出现 `MissingMethodException` 之类运行时错误，编译期看不出来 |
+
+**路线 B 的现成补丁**：[`docs/linux52-routeB.patch`](linux52-routeB.patch)。
+它一次改三处：`OjClientLinux.csproj`（显式引用 `SkiaSharp.NativeAssets.Linux/4.154.0`）、
+`make-deb.py`（`DEPENDS` 分层补齐）、`release.py`（补 `InformationalVersion`，属预防项）。
+补丁由真实源码机械生成、LF 行尾，已用 `git apply --check` 验证可干净应用。
+在 `<工程根目录>`（即 `OjClientLinux/` 与 `OJSetup/` 的共同上级目录）照抄执行：
+
+```bash
+# ① 先空跑：只读，不改文件；没有任何输出、退出码 0 就是能干净应用
+git -c core.autocrlf=false apply --check -p1 <仓库目录>/docs/linux52-routeB.patch
+# ② 确认无误再真应用
+git -c core.autocrlf=false apply -p1 <仓库目录>/docs/linux52-routeB.patch
+# ③ 反悔就原样回退
+git -c core.autocrlf=false apply -R -p1 <仓库目录>/docs/linux52-routeB.patch
+```
+
+⚠️ 应用后**必须**在有桌面环境的 Linux 机器上真启动一次新包，并确认
+`/tmp/ojclient.log` 第一行 banner 是本次版本和时间；若崩在
+`libSkiaSharp` / `Avalonia.Skia`，立刻用第 ③ 条回退并改走路线 A。
+**编译期通过 ≠ 运行时兼容**，这一步不能只在 Windows 上 `dotnet build` 就当成修好了。
 
 #### 6.2.1 路线 A 为什么不是「改一行」
 
@@ -336,6 +358,7 @@ SKShader.CreateRuntimeShader(effect, uniforms, children, ...)
 | 启动路径 | `OjClientLinux/Program.cs:9-24`、`App.axaml.cs:11-27`、`MainWindow.axaml.cs:1945-2015` |
 | 日志 | `OjClientLinux/Services/Log.cs:8-9,25-29` |
 | 产物 | `OJSetup/dist/sanhaioj-client_1.1.0-dev.52_amd64.deb`、`site3/download/SanhaiOJ-linux-x64`、`site3/version.json` |
+| 路线 B 待命补丁（本仓库） | `docs/linux52-routeB.patch` —— 未应用；先 `git apply --check -p1`，再 `apply -p1`，反悔用 `apply -R -p1` |
 
 ---
 

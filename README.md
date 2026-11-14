@@ -718,6 +718,9 @@ Avalonia 启动第一阶段建 Skia 渲染面时崩溃 → 「运行即崩、无
 > 需同时改功能代码；保持 `4.154.0` 则要显式补齐 `SkiaSharp.NativeAssets.Linux/4.154.0`
 > 并做 Linux 真机兼容验证。两条路线的取舍见
 > [docs/TROUBLESHOOTING-LINUX52.md 第 6.2 节](docs/TROUBLESHOOTING-LINUX52.md)。
+> 路线 B 有一份**未应用**的待命补丁
+> [`docs/linux52-routeB.patch`](docs/linux52-routeB.patch)（三处源码改动，
+> 已验证 `git apply --check` 可干净应用）；路线 A 没有现成补丁，需另外改功能代码。
 > **在修复版发出之前，不要让用户升级到 52 Linux 版**，用下面的回退。
 
 **能立刻做的三件事：**
@@ -1066,6 +1069,7 @@ POST /relay/poll
 - [docs/HEARTBEAT-RELAY-DESIGN.md](docs/HEARTBEAT-RELAY-DESIGN.md) —— 设计动机、协议细节、历史推演修正记录
 - [docs/RELEASE-PLAYBOOK.md](docs/RELEASE-PLAYBOOK.md) —— 发版 / 发布 / 回滚逐步命令
 - [docs/TROUBLESHOOTING-LINUX52.md](docs/TROUBLESHOOTING-LINUX52.md) —— 52 Linux 启动崩溃排查
+- [docs/linux52-routeB.patch](docs/linux52-routeB.patch) —— 52 路线 B 待命补丁（**未应用**，应用/回退命令见排障文档 6.2）
 - [client-example/README.md](client-example/README.md) —— 客户端接入
 - [sanhai-client-gateway](https://github.com/sanhaikeji/sanhai-client-gateway) —— Hydro 插件
 

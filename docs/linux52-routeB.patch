@@ -1,0 +1,78 @@
+# 方向 B 待命补丁 —— 让 Linux 原生资产跟主包一起升到 4.154.0
+#
+# 状态：**尚未应用**，等负责人拍板（见 docs/TROUBLESHOOTING-LINUX52.md 第 6.2 节）。
+# 编译期已在 Temp 副本实测：dotnet restore 0 错误、dotnet build 0 错误、无 NU1605/NU1608。
+# 运行时二进制兼容仍未知（Avalonia.Skia/11.3.22 针对 SkiaSharp 2.88.9 编译），需 Linux 真机验证。
+#
+# 应用方法（在 <工程根目录> 下，即 OjClientLinux/ 与 OJSetup/ 的共同上级目录）：
+#   git -c core.autocrlf=false apply <仓库目录>/docs/linux52-routeB.patch
+# 或：
+#   patch -p1 < <仓库目录>/docs/linux52-routeB.patch
+# 应用后必须：① 在有桌面环境的 Linux 机器上真启动一次新包；② 确认 /tmp/ojclient.log 有本次 banner。
+# 若启动崩在 libSkiaSharp / Avalonia.Skia，立刻回退本补丁并改走方向 A。
+#
+# ⚠️ 不要把这个补丁和「方向 A：退回 2.88.9」混用 —— 两者互斥。
+# ⚠️ 补丁必须保持 LF 行尾；Windows 上别用会转成 CRLF 的编辑器另存。
+#
+diff --git a/OJSetup/make-deb.py b/OJSetup/make-deb.py
+index df10290..ad63af2 100644
+--- a/OJSetup/make-deb.py
++++ b/OJSetup/make-deb.py
+@@ -46,9 +46,21 @@ ICON = DOCS / "OJClient" / "Assets" / "logo.png"
+ 
+ # Avalonia（Skia/X11）跑起来要用到的运行库。写全一点没坏处：
+ # 这些在桌面发行版上本来就有，列出来是为了让 apt 在最小安装上也能补齐。
++#  · libssl3    —— .NET 的 HTTPS / 加密握手（HttpClient 拉题面、检查更新都要）；
++#  · libxfixes3 / libgl1 —— X11 光标与选区修复扩展、OpenGL（Skia 建渲染面用）；
++#  · libicu*    —— csproj 里 InvariantGlobalization=false（runtimeconfig.json 的
++#                  System.Globalization.Invariant=false）强制要 ICU。各发行版 ICU
++#                  包名带主版本号且互不兼容，必须用 alternatives 写法列齐，否则
++#                  Ubuntu 24.04（libicu74）/ Debian 12（libicu72）会因包名对不上装不上。
++# ⚠️ 故意**不**把 GTK / WebView / WPE / WebKitGTK 加成硬 Depends：
++#    Linux 端 WebView 恒禁用（MainWindow.axaml.cs 的 HasWebEngine=false，见 ~206 行），
++#    运行时根本不加载那套库；加成硬依赖反而会让精简系统装不上。
++# ⚠️ 更不要把 SkiaSharp.NativeAssets.* 这些 NuGet 托管包写进 Depends（不是系统库）。
+ DEPENDS = ("libc6 (>= 2.31), libx11-6, libice6, libsm6, libfontconfig1, "
+            "libfreetype6, libglib2.0-0, libxext6, libxrender1, libxrandr2, "
+-           "libxi6, libxcursor1, libgdk-pixbuf-2.0-0 | libgdk-pixbuf2.0-0")
++           "libxi6, libxcursor1, libgdk-pixbuf-2.0-0 | libgdk-pixbuf2.0-0, "
++           "libssl3, libxfixes3, libgl1, "
++           "libicu66 | libicu67 | libicu70 | libicu72 | libicu74 | libicu76")
+ 
+ 
+ # ---------------------------------------------------------------- ar 归档
+diff --git a/OJSetup/release.py b/OJSetup/release.py
+index c724b21..155d548 100644
+--- a/OJSetup/release.py
++++ b/OJSetup/release.py
+@@ -115,6 +115,13 @@ def main():
+                  "-p:IncludeNativeLibrariesForSelfExtract=true",
+                  "-p:DebugType=none",
+                  f"-p:Version={VERSION}",
++                 # ⚠️ 预防性：显式传 InformationalVersion（对齐 build-dist.py:124-148）。
++                 #    只传 -p:Version 时，若 obj 里已有一份「看起来还新」的
++                 #    OjClientLinux.AssemblyInfo.cs，MSBuild 可能判定不用重生成 →
++                 #    -p:Version 悄悄失效，产物仍自报 csproj 默认的 1.1.0-beta.34。
++                 #    后果：version.json 写新版本、客户端自报旧版本 → 无限更新循环。
++                 #    ⚠️ dev.52 实测 -p:Version 覆盖完全生效，此项**不是既成故障**。
++                 f"-p:InformationalVersion={VERSION}",
+                  "-o", str(out), "-v", "q", "--nologo"],
+                 LINUX, f"{name} 编译")
+ 
+diff --git a/OjClientLinux/OjClientLinux.csproj b/OjClientLinux/OjClientLinux.csproj
+index ffc01d6..11f2576 100644
+--- a/OjClientLinux/OjClientLinux.csproj
++++ b/OjClientLinux/OjClientLinux.csproj
+@@ -37,6 +37,12 @@
+     <!-- 题面 WebView（MIT，>=11.1.0 即可，不需要升 Avalonia 12） -->
+     <PackageReference Include="Avalonia.Controls.WebView" Version="11.4.1" />
+     <PackageReference Include="SkiaSharp" Version="4.154.0" />
++    <!-- ⚠️ 必须显式引用：SkiaSharp/4.154.0 的 nuspec 只自动带 Win32/macOS 原生资产，
++         不会拉 Linux 的。不写这一行时 NuGet 会让 Linux 原生资产停在
++         Avalonia.Skia/11.3.22 要求的 2.88.9 → 托管 4.154.0 + 原生 2.88.9 错配，
++         Linux 启动建 Skia 渲染面时缺导出符号直接崩（1.1.0-dev.52 事故）。
++         实测补齐后内嵌 libSkiaSharp.so 的 soname 由 88.1.0 变为 154.0.0。 -->
++    <PackageReference Include="SkiaSharp.NativeAssets.Linux" Version="4.154.0" />
+     <!-- 读 GBK(936) 源码文件 -->
+     <PackageReference Include="System.Text.Encoding.CodePages" Version="8.0.0" />
+     <!-- 记住密码：Windows 上走 DPAPI；Linux 上退化为 AES + 本机密钥文件 -->
